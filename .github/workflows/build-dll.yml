@@ -1,0 +1,72 @@
+name: Build SbieDll
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch or tag to build
+        required: true
+        type: string
+
+run-name: "Build SbieDll (${{ inputs.source_ref }})"
+
+jobs:
+  Build_x86_DLL:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4.1.7
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: '[17.0,18.0)'
+
+      - name: Remove legacy MFC resource dependency
+        run: |
+          $resource = 'Sandboxie\core\dll\resource.rc'
+          $content = Get-Content $resource -Raw
+          if (-not $content.Contains('#include "afxres.h"')) {
+            throw 'Expected afxres.h include was not found'
+          }
+          $content.Replace('#include "afxres.h"', '#include <winres.h>') |
+            Set-Content $resource -NoNewline
+
+      - name: Build 32-bit SbieDll
+        run: |
+          $projects = @(
+            'Sandboxie\msgs\Parse.vcxproj'
+            'Sandboxie\msgs\SboxMsg.vcxproj'
+            'Sandboxie\core\low\LowLevel.vcxproj'
+            'Sandboxie\core\dll\SboxDll.vcxproj'
+          )
+          $buildArgs = @(
+            '/t:Build'
+            '/p:Configuration=SbieRelease'
+            '/p:Platform=Win32'
+            '/p:PlatformToolset=v142'
+            '/p:VCToolsVersion=14.29.30133'
+            '/p:WindowsTargetPlatformVersion=10.0.22621.0'
+            "/p:SolutionDir=$env:GITHUB_WORKSPACE\Sandboxie\"
+            '-maxcpucount:8'
+          )
+          foreach ($project in $projects) {
+            & msbuild $project $buildArgs
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+
+      - name: Upload 32-bit SbieDll
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: SbieDll-Win32
+          path: |
+            Sandboxie/Bin/Win32/SbieRelease/SbieDll.dll
+            Sandboxie/Bin/Win32/SbieRelease/SbieDll.pdb
+          if-no-files-found: error
+          retention-days: 60
