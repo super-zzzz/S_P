@@ -811,6 +811,7 @@ _FX void* Ldr_Inject_Entry(ULONG_PTR *pPtr)
 {
     UCHAR *entrypoint;
     ULONG dummy_prot;
+    ULONG restore_prot = Ldr_Inject_OldProtect;
 
     //
     // restore correct code sequence at the entrypoint
@@ -832,26 +833,33 @@ _FX void* Ldr_Inject_Entry(ULONG_PTR *pPtr)
     *pPtr = (ULONG_PTR)entrypoint;
 #endif
 
-    // If entrypoint hook is different, need to adjust offset. Copying the original byets won't have the correct offset.
+    // If the saved entrypoint starts with a relative call/jump and the hook was
+    // relocated, adjust its rel32 operand for the new location.
     // MS UEV also hooks exe entry.
     if (g_entrypoint != (ULONG_PTR)entrypoint)
     {
 #ifdef _WIN64
         // We haven't seen the case yet. MS UEV may or may not have conflicts in this case.
 #else
-        ULONG_PTR   nDiff = (ULONG_PTR)entrypoint - g_entrypoint;
-        ULONG_PTR*  pAddressOrig = (ULONG_PTR*)&Ldr_Inject_SaveBytes[1];
-        *pAddressOrig = (*pAddressOrig) - nDiff;
+        if (Ldr_Inject_SaveBytes[0] == 0xE8 || Ldr_Inject_SaveBytes[0] == 0xE9)
+        {
+            ULONG_PTR   nDiff = (ULONG_PTR)entrypoint - g_entrypoint;
+            ULONG_PTR*  pAddressOrig = (ULONG_PTR*)&Ldr_Inject_SaveBytes[1];
+            *pAddressOrig = (*pAddressOrig) - nDiff;
+        }
 #endif
     }
 
     VirtualProtect(entrypoint, LDR_INJECT_NUM_SAVE_BYTES,
                    PAGE_EXECUTE_READWRITE, &dummy_prot);
 
+    if (g_entrypoint != (ULONG_PTR)entrypoint)
+        restore_prot = dummy_prot;
+
     memcpy(entrypoint, Ldr_Inject_SaveBytes, LDR_INJECT_NUM_SAVE_BYTES);
 
     VirtualProtect(entrypoint, LDR_INJECT_NUM_SAVE_BYTES,
-                   Ldr_Inject_OldProtect, &dummy_prot);
+                   restore_prot, &dummy_prot);
 
 #ifdef _M_ARM64
     NtFlushInstructionCache(GetCurrentProcess(), entrypoint, LDR_INJECT_NUM_SAVE_BYTES);
